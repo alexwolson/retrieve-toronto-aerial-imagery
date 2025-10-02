@@ -10,7 +10,6 @@ import concurrent.futures
 import hashlib
 import logging
 import math
-import os
 import re
 import sys
 import time
@@ -22,15 +21,18 @@ import numpy as np
 import rasterio
 import requests
 from PIL import Image
-from pyproj import Transformer
 from rasterio.crs import CRS
 from rasterio.transform import from_bounds
-from rasterio.warp import calculate_default_transform, reproject, Resampling
+from rasterio.warp import Resampling
+from rich.logging import RichHandler
+from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn, TimeRemainingColumn
 
-# Configure logging
+# Configure Rich logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    format='%(message)s',
+    datefmt='[%X]',
+    handlers=[RichHandler(rich_tracebacks=True, show_path=False)]
 )
 logger = logging.getLogger(__name__)
 
@@ -103,20 +105,33 @@ class TileDownloader:
         """Download multiple tiles concurrently."""
         results = {}
         
-        with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            future_to_tile = {
-                executor.submit(self.download_tile, url): (col, row)
-                for col, row, url in tile_urls
-            }
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TextColumn("({task.completed}/{task.total})"),
+            TimeElapsedColumn(),
+            TimeRemainingColumn(),
+        ) as progress:
+            task = progress.add_task("Downloading tiles", total=len(tile_urls))
             
-            for future in concurrent.futures.as_completed(future_to_tile):
-                col, row = future_to_tile[future]
-                try:
-                    img = future.result()
-                    if img is not None:
-                        results[(col, row)] = img
-                except Exception as e:
-                    logger.error(f"Error processing tile ({col}, {row}): {e}")
+            with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                future_to_tile = {
+                    executor.submit(self.download_tile, url): (col, row)
+                    for col, row, url in tile_urls
+                }
+                
+                for future in concurrent.futures.as_completed(future_to_tile):
+                    col, row = future_to_tile[future]
+                    try:
+                        img = future.result()
+                        if img is not None:
+                            results[(col, row)] = img
+                    except Exception as e:
+                        logger.error(f"Error processing tile ({col}, {row}): {e}")
+                    
+                    progress.update(task, advance=1)
         
         return results
     
@@ -144,7 +159,7 @@ class TileDownloader:
         cached_size = 0
         
         # Check which tiles are already cached
-        for col, row, url in tile_urls:
+        for _, _, url in tile_urls:
             cache_path = self._get_cache_path(url)
             if cache_path.exists():
                 cached_tiles += 1
@@ -175,17 +190,28 @@ class TileDownloader:
         logger.info(f"Sampling {sample_size} tiles to estimate download size...")
         
         sample_sizes = []
-        with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, sample_size)) as executor:
-            futures = [executor.submit(self._get_tile_size_head, url) 
-                      for _, _, url in sample_urls]
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TimeElapsedColumn(),
+        ) as progress:
+            task = progress.add_task("Sampling tiles", total=sample_size)
             
-            for future in concurrent.futures.as_completed(futures):
-                try:
-                    size = future.result()
-                    if size:
-                        sample_sizes.append(size)
-                except Exception as e:
-                    logger.debug(f"Error sampling tile: {e}")
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, sample_size)) as executor:
+                futures = [executor.submit(self._get_tile_size_head, url) 
+                          for _, _, url in sample_urls]
+                
+                for future in concurrent.futures.as_completed(futures):
+                    try:
+                        size = future.result()
+                        if size:
+                            sample_sizes.append(size)
+                    except Exception as e:
+                        logger.debug(f"Error sampling tile: {e}")
+                    
+                    progress.update(task, advance=1)
         
         # Calculate average and estimate
         if sample_sizes:
@@ -438,16 +464,28 @@ def create_geotiff_mosaic(tiles_data: Dict[Tuple[int, int], Image.Image],
     mosaic = np.zeros((bands, height, width), dtype=np.uint8)
     
     # Place tiles in mosaic
-    for (col, row), img in tiles_data.items():
-        x_offset = (col - min_col) * tile_size
-        y_offset = (row - min_row) * tile_size
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        TextColumn("({task.completed}/{task.total})"),
+        TimeElapsedColumn(),
+    ) as progress:
+        task = progress.add_task("Placing tiles in mosaic", total=len(tiles_data))
         
-        # Convert to numpy array
-        img_array = np.array(img.convert('RGB' if bands == 3 else 'RGBA'))
-        
-        # Place in mosaic (rasterio expects bands, height, width)
-        for band_idx in range(bands):
-            mosaic[band_idx, y_offset:y_offset + tile_size, x_offset:x_offset + tile_size] = img_array[:, :, band_idx]
+        for (col, row), img in tiles_data.items():
+            x_offset = (col - min_col) * tile_size
+            y_offset = (row - min_row) * tile_size
+            
+            # Convert to numpy array
+            img_array = np.array(img.convert('RGB' if bands == 3 else 'RGBA'))
+            
+            # Place in mosaic (rasterio expects bands, height, width)
+            for band_idx in range(bands):
+                mosaic[band_idx, y_offset:y_offset + tile_size, x_offset:x_offset + tile_size] = img_array[:, :, band_idx]
+            
+            progress.update(task, advance=1)
     
     # Get geographic bounds
     min_x, min_y, _, _ = get_tile_bounds(min_col, min_row, zoom)

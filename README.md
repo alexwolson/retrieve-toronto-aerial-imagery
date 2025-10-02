@@ -8,6 +8,7 @@ A Python CLI tool to fetch City of Toronto orthorectified aerial imagery from th
 - **High Resolution**: Picks the highest available zoom level by default
 - **Smart Tile Management**: Computes tile indices for Toronto extent automatically
 - **Dry Run Mode**: Estimate download size and time before downloading (new!)
+- **Rich Progress Display**: Beautiful progress bars and enhanced logging powered by Rich
 - **Concurrent Downloads**: Downloads tiles concurrently with configurable worker threads
 - **Retry Logic**: Built-in retry mechanism with exponential backoff for failed downloads
 - **Resume-Safe Cache**: Caches downloaded tiles to disk, allowing for resumable downloads
