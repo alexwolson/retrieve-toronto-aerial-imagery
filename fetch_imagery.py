@@ -296,18 +296,40 @@ class WMTSClient:
         max_zoom = 18  # Default
         
         for link in tile_matrix_links:
-            tile_matrix_set = link.find('.//wmts:TileMatrixSet', WMTS_NS)
-            if tile_matrix_set is None:
-                tile_matrix_set = link.find('.//TileMatrixSet')
+            tile_matrix_set_elem = link.find('.//wmts:TileMatrixSet', WMTS_NS)
+            if tile_matrix_set_elem is None:
+                tile_matrix_set_elem = link.find('.//TileMatrixSet')
             
-            if tile_matrix_set is not None:
-                # Look for tile matrices
-                matrices = self.capabilities.findall(
-                    f'.//wmts:TileMatrix',
+            if tile_matrix_set_elem is not None:
+                tile_matrix_set_id = tile_matrix_set_elem.text
+                
+                # Find the specific TileMatrixSet definition
+                # Try with namespace first
+                tile_matrix_set_def = self.capabilities.find(
+                    f'.//wmts:TileMatrixSet[ows:Identifier="{tile_matrix_set_id}"]',
                     WMTS_NS
                 )
-                if matrices:
-                    max_zoom = len(matrices) - 1
+                if tile_matrix_set_def is None:
+                    # Try without namespace
+                    tile_matrix_set_def = self.capabilities.find(
+                        f'.//TileMatrixSet[ows:Identifier="{tile_matrix_set_id}"]',
+                        WMTS_NS
+                    )
+                if tile_matrix_set_def is None:
+                    # Try with simple Identifier
+                    tile_matrix_set_def = self.capabilities.find(
+                        f'.//TileMatrixSet[Identifier="{tile_matrix_set_id}"]'
+                    )
+                
+                if tile_matrix_set_def is not None:
+                    # Count TileMatrix elements within this specific TileMatrixSet
+                    matrices = tile_matrix_set_def.findall('.//wmts:TileMatrix', WMTS_NS)
+                    if not matrices:
+                        matrices = tile_matrix_set_def.findall('.//TileMatrix')
+                    
+                    if matrices:
+                        max_zoom = len(matrices) - 1
+                        break
         
         logger.info(f"Max zoom level for {layer_id}: {max_zoom}")
         return max_zoom
