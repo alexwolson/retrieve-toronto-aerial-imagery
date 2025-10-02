@@ -2,8 +2,6 @@
 
 A Python CLI tool to fetch City of Toronto orthorectified aerial imagery from the public OGC WMTS (Web Map Tile Service) endpoint and create Cloud-Optimized GeoTIFF mosaics.
 
-**🚀 New here? Check out the [QUICKSTART.md](QUICKSTART.md) guide to get up and running in 5 minutes!**
-
 ## Features
 
 - **Auto-detection**: Automatically detects the newest ortho layer (e.g., `cot_ortho_2022_color_8cm`)
@@ -338,10 +336,6 @@ python fetch_imagery.py \
   --zoom 14 \
   --output toronto_full_lowres.tif
 ```
-
-## License
-
-MIT License - see LICENSE file for details
 
 ## Contributing
 

@@ -1,7 +1,3 @@
 include README.md
-include QUICKSTART.md
-include LICENSE
 include requirements.txt
-include examples.sh
-include demo_workflow.py
 include test_fetch_imagery.py
