@@ -41,7 +41,7 @@ WMTS_NS = {
 }
 
 # Default WMTS URL for City of Toronto
-DEFAULT_WMTS_URL = "https://geoappext.toronto.ca/arcgis/rest/services/IMAGERY/Orthophotos_2022/MapServer/WMTS/1.0.0/WMTSCapabilities.xml"
+DEFAULT_WMTS_URL = "https://gis.toronto.ca/arcgis/rest/services/basemap/cot_ortho/MapServer/WMTS/1.0.0/WMTSCapabilities.xml"
 
 # Default Toronto extent in EPSG:4326 (WGS84)
 DEFAULT_BBOX = [-79.639, 43.581, -79.116, 43.855]  # [west, south, east, north]
@@ -243,7 +243,9 @@ class WMTSClient:
             layers_found = self.capabilities.findall('.//Layer')
         
         for layer in layers_found:
-            identifier = layer.find('.//wmts:Identifier', WMTS_NS)
+            identifier = layer.find('.//ows:Identifier', WMTS_NS)
+            if identifier is None:
+                identifier = layer.find('.//wmts:Identifier', WMTS_NS)
             if identifier is None:
                 identifier = layer.find('.//Identifier')
             
@@ -254,6 +256,7 @@ class WMTSClient:
     
     def get_newest_ortho_layer(self) -> Optional[str]:
         """Auto-detect the newest ortho layer based on naming patterns."""
+        # First, try to find layers with year patterns
         ortho_pattern = re.compile(r'(cot_)?ortho[_-]?(\d{4})', re.IGNORECASE)
         
         ortho_layers = {}
@@ -263,14 +266,20 @@ class WMTSClient:
                 year = int(match.group(2))
                 ortho_layers[layer_id] = year
         
-        if not ortho_layers:
-            logger.warning("No ortho layers found with year pattern")
-            return None
+        if ortho_layers:
+            # Return layer with highest year
+            newest_layer = max(ortho_layers.items(), key=lambda x: x[1])[0]
+            logger.info(f"Auto-detected newest ortho layer: {newest_layer} (year: {ortho_layers[newest_layer]})")
+            return newest_layer
         
-        # Return layer with highest year
-        newest_layer = max(ortho_layers.items(), key=lambda x: x[1])[0]
-        logger.info(f"Auto-detected newest ortho layer: {newest_layer} (year: {ortho_layers[newest_layer]})")
-        return newest_layer
+        # If no year pattern found, look for generic ortho layers
+        for layer_id in self.layers.keys():
+            if 'ortho' in layer_id.lower() or 'imagery' in layer_id.lower():
+                logger.info(f"Auto-detected ortho layer: {layer_id}")
+                return layer_id
+        
+        logger.warning("No ortho layers found")
+        return None
     
     def get_max_zoom_level(self, layer_id: str) -> int:
         """Get the maximum zoom level for a layer."""

@@ -234,7 +234,7 @@ python fetch_imagery.py \
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--wmts-url` | WMTS capabilities URL | Toronto 2022 Orthophotos service |
+| `--wmts-url` | WMTS capabilities URL | Toronto Current Year Orthophotos service |
 | `--layer` | Layer name override | Auto-detected newest ortho layer |
 | `--bbox WEST SOUTH EAST NORTH` | Bounding box in EPSG:4326 | Toronto extent: -79.639 43.581 -79.116 43.855 |
 | `--zoom` | Zoom level | Auto-detected maximum zoom |
