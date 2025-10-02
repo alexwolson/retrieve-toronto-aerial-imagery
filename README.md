@@ -9,6 +9,7 @@ A Python CLI tool to fetch City of Toronto orthorectified aerial imagery from th
 - **Auto-detection**: Automatically detects the newest ortho layer (e.g., `cot_ortho_2022_color_8cm`)
 - **High Resolution**: Picks the highest available zoom level by default
 - **Smart Tile Management**: Computes tile indices for Toronto extent automatically
+- **Dry Run Mode**: Estimate download size and time before downloading (new!)
 - **Concurrent Downloads**: Downloads tiles concurrently with configurable worker threads
 - **Retry Logic**: Built-in retry mechanism with exponential backoff for failed downloads
 - **Resume-Safe Cache**: Caches downloaded tiles to disk, allowing for resumable downloads
@@ -102,6 +103,50 @@ This will:
 - Save output to `toronto_aerial.tif`
 
 ### Advanced Usage
+
+#### Dry Run - Estimate Download Size
+
+Before downloading, you can estimate the total download size and time:
+
+```bash
+# Using uv
+uv run python fetch_imagery.py --bbox -79.4 43.64 -79.36 43.67 --zoom 19 --dry-run
+
+# Using pip
+python fetch_imagery.py --bbox -79.4 43.64 -79.36 43.67 --zoom 19 --dry-run
+```
+
+This will:
+- Sample a few tiles to estimate average size
+- Check which tiles are already cached
+- Show estimated download size and time for different connection speeds
+- Exit without downloading anything
+
+**Example output:**
+```
+📊 Download Estimation Summary
+================================================================================
+Bounding box:          [-79.4, 43.64, -79.36, 43.67]
+Zoom level:            19
+Total tiles:           256
+Already cached:        0 tiles (0.00 B)
+Tiles to download:     256
+
+Average tile size:     87.34 KB
+                       (based on 10 sampled tiles)
+
+📥 Estimated download: 21.84 MB
+💾 Total size:         21.84 MB
+
+⏱️  Time Estimates (approximate):
+
+  Fast (50 Mbps)      : ~4 seconds
+  Medium (10 Mbps)    : ~18 seconds
+  Slow (2 Mbps)       : ~87 seconds
+
+💡 Note: Actual download time depends on server response time,
+   network conditions, and concurrent workers (--max-workers).
+```
 
 #### Specify Custom Bounding Box
 
@@ -200,6 +245,7 @@ python fetch_imagery.py \
 | `--output` / `-o` | Output GeoTIFF path | `toronto_aerial.tif` |
 | `--tile-matrix-set` | Tile matrix set identifier | `default` |
 | `--verbose` / `-v` | Enable verbose logging | False |
+| `--dry-run` | Estimate download size without downloading | False |
 
 ## How It Works
 

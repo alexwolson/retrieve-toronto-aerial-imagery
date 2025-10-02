@@ -119,6 +119,95 @@ class TileDownloader:
                     logger.error(f"Error processing tile ({col}, {row}): {e}")
         
         return results
+    
+    def _get_tile_size_head(self, url: str) -> Optional[int]:
+        """Get tile size using HEAD request."""
+        try:
+            response = self.session.head(url, timeout=10)
+            content_length = response.headers.get('Content-Length')
+            if content_length:
+                return int(content_length)
+        except Exception:
+            pass
+        return None
+    
+    def estimate_download_size(self, tile_urls: List[Tuple[int, int, str]], 
+                              sample_count: int = 10) -> Dict[str, any]:
+        """
+        Estimate total download size by sampling tiles.
+        Returns statistics about the download.
+        """
+        import random
+        
+        total_tiles = len(tile_urls)
+        cached_tiles = 0
+        cached_size = 0
+        
+        # Check which tiles are already cached
+        for col, row, url in tile_urls:
+            cache_path = self._get_cache_path(url)
+            if cache_path.exists():
+                cached_tiles += 1
+                cached_size += cache_path.stat().st_size
+        
+        tiles_to_download = total_tiles - cached_tiles
+        
+        if tiles_to_download == 0:
+            return {
+                'total_tiles': total_tiles,
+                'cached_tiles': cached_tiles,
+                'tiles_to_download': 0,
+                'total_size_bytes': cached_size,
+                'download_size_bytes': 0,
+                'cached_size_bytes': cached_size,
+                'average_tile_size_bytes': cached_size / cached_tiles if cached_tiles > 0 else 0,
+                'sample_count': cached_tiles,
+                'is_estimate': False
+            }
+        
+        # Sample some tiles to estimate size
+        uncached_urls = [(col, row, url) for col, row, url in tile_urls 
+                         if not self._get_cache_path(url).exists()]
+        
+        sample_size = min(sample_count, len(uncached_urls))
+        sample_urls = random.sample(uncached_urls, sample_size)
+        
+        logger.info(f"Sampling {sample_size} tiles to estimate download size...")
+        
+        sample_sizes = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, sample_size)) as executor:
+            futures = [executor.submit(self._get_tile_size_head, url) 
+                      for _, _, url in sample_urls]
+            
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    size = future.result()
+                    if size:
+                        sample_sizes.append(size)
+                except Exception as e:
+                    logger.debug(f"Error sampling tile: {e}")
+        
+        # Calculate average and estimate
+        if sample_sizes:
+            avg_tile_size = sum(sample_sizes) / len(sample_sizes)
+        else:
+            # Fallback estimate: aerial imagery tiles are typically 50-150KB
+            avg_tile_size = 100_000  # 100KB
+        
+        estimated_download_size = avg_tile_size * tiles_to_download
+        total_size = cached_size + estimated_download_size
+        
+        return {
+            'total_tiles': total_tiles,
+            'cached_tiles': cached_tiles,
+            'tiles_to_download': tiles_to_download,
+            'total_size_bytes': total_size,
+            'download_size_bytes': estimated_download_size,
+            'cached_size_bytes': cached_size,
+            'average_tile_size_bytes': avg_tile_size,
+            'sample_count': len(sample_sizes),
+            'is_estimate': True
+        }
 
 
 class WMTSClient:
@@ -397,6 +486,29 @@ def create_geotiff_mosaic(tiles_data: Dict[Tuple[int, int], Image.Image],
         return False
 
 
+def format_bytes(bytes_val: float) -> str:
+    """Format bytes into human-readable string."""
+    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+        if bytes_val < 1024.0:
+            return f"{bytes_val:.2f} {unit}"
+        bytes_val /= 1024.0
+    return f"{bytes_val:.2f} PB"
+
+
+def format_time(seconds: float) -> str:
+    """Format seconds into human-readable time string."""
+    if seconds < 60:
+        return f"{seconds:.0f} seconds"
+    elif seconds < 3600:
+        return f"{seconds/60:.1f} minutes"
+    else:
+        hours = seconds / 3600
+        if hours < 24:
+            return f"{hours:.1f} hours"
+        else:
+            return f"{hours/24:.1f} days"
+
+
 def main():
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -465,6 +577,12 @@ def main():
         help='Enable verbose logging'
     )
     
+    parser.add_argument(
+        '--dry-run',
+        action='store_true',
+        help='Estimate download size without actually downloading tiles'
+    )
+    
     args = parser.parse_args()
     
     # Set logging level
@@ -523,6 +641,67 @@ def main():
             row=row
         )
         tile_urls.append((col, row, url))
+    
+    # Dry run mode - estimate download size
+    if args.dry_run:
+        logger.info("=" * 80)
+        logger.info("DRY RUN MODE - Estimating download requirements")
+        logger.info("=" * 80)
+        
+        downloader = TileDownloader(args.cache_dir, args.max_workers)
+        stats = downloader.estimate_download_size(tile_urls, sample_count=10)
+        
+        # Format output
+        print()
+        print("📊 Download Estimation Summary")
+        print("=" * 80)
+        print(f"Bounding box:          [{args.bbox[0]}, {args.bbox[1]}, {args.bbox[2]}, {args.bbox[3]}]")
+        print(f"Zoom level:            {zoom}")
+        print(f"Total tiles:           {stats['total_tiles']:,}")
+        print(f"Already cached:        {stats['cached_tiles']:,} tiles ({format_bytes(stats['cached_size_bytes'])})")
+        print(f"Tiles to download:     {stats['tiles_to_download']:,}")
+        print()
+        
+        if stats['tiles_to_download'] > 0:
+            print(f"Average tile size:     {format_bytes(stats['average_tile_size_bytes'])}")
+            if stats['is_estimate'] and stats['sample_count'] > 0:
+                print(f"                       (based on {stats['sample_count']} sampled tiles)")
+            elif not stats['is_estimate']:
+                print(f"                       (based on cached tiles)")
+            print()
+            print(f"📥 Estimated download: {format_bytes(stats['download_size_bytes'])}")
+        
+        print(f"💾 Total size:         {format_bytes(stats['total_size_bytes'])}")
+        print()
+        
+        # Time estimates
+        if stats['tiles_to_download'] > 0:
+            print("⏱️  Time Estimates (approximate):")
+            print()
+            
+            # Different connection speeds
+            speeds = {
+                'Fast (50 Mbps)': 50 * 1024 * 1024 / 8,     # bytes per second
+                'Medium (10 Mbps)': 10 * 1024 * 1024 / 8,
+                'Slow (2 Mbps)': 2 * 1024 * 1024 / 8
+            }
+            
+            for speed_name, bytes_per_sec in speeds.items():
+                seconds = stats['download_size_bytes'] / bytes_per_sec
+                time_str = format_time(seconds)
+                print(f"  {speed_name:20s}: ~{time_str}")
+            
+            print()
+            print("💡 Note: Actual download time depends on server response time,")
+            print("   network conditions, and concurrent workers (--max-workers).")
+        else:
+            print("✅ All tiles are already cached! No download needed.")
+        
+        print()
+        print("To proceed with the download, run again without --dry-run")
+        print("=" * 80)
+        
+        return 0
     
     # Download tiles
     downloader = TileDownloader(args.cache_dir, args.max_workers)

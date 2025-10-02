@@ -146,5 +146,55 @@ class TestTileDownloader(unittest.TestCase):
             self.assertTrue(str(path2).startswith(tmpdir))
 
 
+class TestDryRunFeature(unittest.TestCase):
+    """Test the dry-run estimation feature."""
+    
+    def test_format_bytes(self):
+        """Test byte formatting."""
+        from fetch_imagery import format_bytes
+        
+        self.assertEqual(format_bytes(100), "100.00 B")
+        self.assertEqual(format_bytes(1024), "1.00 KB")
+        self.assertEqual(format_bytes(1024 * 1024), "1.00 MB")
+        self.assertEqual(format_bytes(1024 * 1024 * 1024), "1.00 GB")
+    
+    def test_format_time(self):
+        """Test time formatting."""
+        from fetch_imagery import format_time
+        
+        self.assertEqual(format_time(30), "30 seconds")
+        self.assertEqual(format_time(90), "1.5 minutes")
+        self.assertEqual(format_time(3600), "1.0 hours")
+        self.assertEqual(format_time(7200), "2.0 hours")
+    
+    def test_estimate_download_all_cached(self):
+        """Test estimation when all tiles are cached."""
+        import tempfile
+        from pathlib import Path
+        from fetch_imagery import TileDownloader
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            downloader = TileDownloader(Path(tmpdir))
+            
+            # Create some fake cached tiles
+            tile_urls = []
+            for i in range(3):
+                url = f"http://example.com/tile_{i}.png"
+                cache_path = downloader._get_cache_path(url)
+                cache_path.write_bytes(b'fake_tile_data_' * 1000)  # ~15KB each
+                tile_urls.append((i, i, url))
+            
+            # Estimate
+            stats = downloader.estimate_download_size(tile_urls, sample_count=10)
+            
+            # Verify
+            self.assertEqual(stats['total_tiles'], 3)
+            self.assertEqual(stats['cached_tiles'], 3)
+            self.assertEqual(stats['tiles_to_download'], 0)
+            self.assertEqual(stats['download_size_bytes'], 0)
+            self.assertGreater(stats['cached_size_bytes'], 0)
+            self.assertFalse(stats['is_estimate'])
+
+
 if __name__ == '__main__':
     unittest.main()
