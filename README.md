@@ -19,8 +19,9 @@ A Python CLI tool to fetch City of Toronto orthorectified aerial imagery from th
 
 ### Requirements
 
-- Python 3.8 or higher
+- Python 3.9 or higher
 - GDAL libraries installed on your system
+- [uv](https://docs.astral.sh/uv/) (recommended) or pip
 
 ### Install GDAL
 
@@ -38,14 +39,37 @@ brew install gdal
 **Windows:**
 - Download and install from [OSGeo4W](https://trac.osgeo.org/osgeo4w/)
 
+### Install uv (Recommended)
+
+**Install uv:**
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
 ### Install Python Dependencies
 
-**Option 1: Using pip with requirements.txt**
+**Option 1: Using uv (Recommended)**
+```bash
+# Clone the repository
+git clone https://github.com/your-username/retrieve-toronto-aerial-imagery.git
+cd retrieve-toronto-aerial-imagery
+
+# Install dependencies and the package
+uv sync
+
+# Run the tool directly with uv
+uv run fetch-toronto-imagery
+
+# Or run the Python script directly
+uv run python fetch_imagery.py
+```
+
+**Option 2: Using pip with requirements.txt**
 ```bash
 pip install -r requirements.txt
 ```
 
-**Option 2: Using setup.py (installs as a command)**
+**Option 3: Using pip with setup.py (installs as a command)**
 ```bash
 pip install -e .
 # Now you can use: fetch-toronto-imagery instead of: python fetch_imagery.py
@@ -57,8 +81,18 @@ pip install -e .
 
 Fetch aerial imagery for Toronto with default settings:
 
+**Using uv (Recommended):**
+```bash
+uv run python fetch_imagery.py
+# or
+uv run fetch-toronto-imagery
+```
+
+**Using pip:**
 ```bash
 python fetch_imagery.py
+# or (if installed with pip install -e .)
+fetch-toronto-imagery
 ```
 
 This will:
@@ -72,6 +106,10 @@ This will:
 #### Specify Custom Bounding Box
 
 ```bash
+# Using uv
+uv run python fetch_imagery.py --bbox -79.5 43.6 -79.3 43.7
+
+# Using pip
 python fetch_imagery.py --bbox -79.5 43.6 -79.3 43.7
 ```
 
@@ -80,36 +118,66 @@ Bounding box format: `WEST SOUTH EAST NORTH` in EPSG:4326 (WGS84) coordinates
 #### Override Layer Name
 
 ```bash
+# Using uv
+uv run python fetch_imagery.py --layer cot_ortho_2022_color_8cm
+
+# Using pip
 python fetch_imagery.py --layer cot_ortho_2022_color_8cm
 ```
 
 #### Specify Zoom Level
 
 ```bash
+# Using uv
+uv run python fetch_imagery.py --zoom 18
+
+# Using pip
 python fetch_imagery.py --zoom 18
 ```
 
 #### Adjust Concurrency
 
 ```bash
+# Using uv
+uv run python fetch_imagery.py --max-workers 16
+
+# Using pip
 python fetch_imagery.py --max-workers 16
 ```
 
 #### Custom Output Path
 
 ```bash
+# Using uv
+uv run python fetch_imagery.py --output downtown_toronto.tif
+
+# Using pip
 python fetch_imagery.py --output downtown_toronto.tif
 ```
 
 #### Use Different WMTS URL
 
 ```bash
+# Using uv
+uv run python fetch_imagery.py --wmts-url "https://example.com/wmts/WMTSCapabilities.xml"
+
+# Using pip
 python fetch_imagery.py --wmts-url "https://example.com/wmts/WMTSCapabilities.xml"
 ```
 
 ### Complete Example
 
 ```bash
+# Using uv
+uv run python fetch_imagery.py \
+  --bbox -79.4 43.64 -79.36 43.67 \
+  --zoom 19 \
+  --max-workers 12 \
+  --cache-dir ./my_cache \
+  --output highres_downtown.tif \
+  --verbose
+
+# Using pip
 python fetch_imagery.py \
   --bbox -79.4 43.64 -79.36 43.67 \
   --zoom 19 \
@@ -196,6 +264,13 @@ For large areas, consider:
 ### Downtown Toronto Core
 
 ```bash
+# Using uv
+uv run python fetch_imagery.py \
+  --bbox -79.39 43.64 -79.37 43.66 \
+  --zoom 20 \
+  --output downtown_core.tif
+
+# Using pip
 python fetch_imagery.py \
   --bbox -79.39 43.64 -79.37 43.66 \
   --zoom 20 \
@@ -205,6 +280,13 @@ python fetch_imagery.py \
 ### Entire City (Low Resolution)
 
 ```bash
+# Using uv
+uv run python fetch_imagery.py \
+  --bbox -79.639 43.581 -79.116 43.855 \
+  --zoom 14 \
+  --output toronto_full_lowres.tif
+
+# Using pip
 python fetch_imagery.py \
   --bbox -79.639 43.581 -79.116 43.855 \
   --zoom 14 \
