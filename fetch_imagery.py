@@ -155,37 +155,10 @@ class TileDownloader:
         import random
         
         total_tiles = len(tile_urls)
-        cached_tiles = 0
-        cached_size = 0
         
-        # Check which tiles are already cached
-        for _, _, url in tile_urls:
-            cache_path = self._get_cache_path(url)
-            if cache_path.exists():
-                cached_tiles += 1
-                cached_size += cache_path.stat().st_size
-        
-        tiles_to_download = total_tiles - cached_tiles
-        
-        if tiles_to_download == 0:
-            return {
-                'total_tiles': total_tiles,
-                'cached_tiles': cached_tiles,
-                'tiles_to_download': 0,
-                'total_size_bytes': cached_size,
-                'download_size_bytes': 0,
-                'cached_size_bytes': cached_size,
-                'average_tile_size_bytes': cached_size / cached_tiles if cached_tiles > 0 else 0,
-                'sample_count': cached_tiles,
-                'is_estimate': False
-            }
-        
-        # Sample some tiles to estimate size
-        uncached_urls = [(col, row, url) for col, row, url in tile_urls 
-                         if not self._get_cache_path(url).exists()]
-        
-        sample_size = min(sample_count, len(uncached_urls))
-        sample_urls = random.sample(uncached_urls, sample_size)
+        # Sample some tiles to estimate size (sample from all tiles without checking cache)
+        sample_size = min(sample_count, len(tile_urls))
+        sample_urls = random.sample(tile_urls, sample_size)
         
         logger.info(f"Sampling {sample_size} tiles to estimate download size...")
         
@@ -220,16 +193,15 @@ class TileDownloader:
             # Fallback estimate: aerial imagery tiles are typically 50-150KB
             avg_tile_size = 100_000  # 100KB
         
-        estimated_download_size = avg_tile_size * tiles_to_download
-        total_size = cached_size + estimated_download_size
+        estimated_download_size = avg_tile_size * total_tiles
         
         return {
             'total_tiles': total_tiles,
-            'cached_tiles': cached_tiles,
-            'tiles_to_download': tiles_to_download,
-            'total_size_bytes': total_size,
+            'cached_tiles': 0,
+            'tiles_to_download': total_tiles,
+            'total_size_bytes': estimated_download_size,
             'download_size_bytes': estimated_download_size,
-            'cached_size_bytes': cached_size,
+            'cached_size_bytes': 0,
             'average_tile_size_bytes': avg_tile_size,
             'sample_count': len(sample_sizes),
             'is_estimate': True
