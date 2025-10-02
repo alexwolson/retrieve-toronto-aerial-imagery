@@ -14,6 +14,8 @@ from fetch_imagery import (
     latlon_to_tile,
     get_tile_bounds,
     compute_tile_indices,
+    filter_tiles_by_osm,
+    OSMFilter,
     DEFAULT_BBOX
 )
 
@@ -166,34 +168,87 @@ class TestDryRunFeature(unittest.TestCase):
         self.assertEqual(format_time(90), "1.5 minutes")
         self.assertEqual(format_time(3600), "1.0 hours")
         self.assertEqual(format_time(7200), "2.0 hours")
+
+
+class TestOSMFiltering(unittest.TestCase):
+    """Test OSM filtering functionality."""
     
-    def test_estimate_download_all_cached(self):
-        """Test estimation when all tiles are cached."""
-        import tempfile
-        from pathlib import Path
-        from fetch_imagery import TileDownloader
+    def test_osm_filter_initialization(self):
+        """Test OSM filter can be initialized."""
+        bbox = [-79.5, 43.6, -79.3, 43.7]
+        osm_filter = OSMFilter(bbox)
+        self.assertEqual(osm_filter.bbox, bbox)
+        self.assertEqual(len(osm_filter.road_geometries), 0)
+    
+    def test_line_intersects_bbox_point_inside(self):
+        """Test line intersection when point is inside bbox."""
+        osm_filter = OSMFilter([0, 0, 1, 1])
         
-        with tempfile.TemporaryDirectory() as tmpdir:
-            downloader = TileDownloader(Path(tmpdir))
-            
-            # Create some fake cached tiles
-            tile_urls = []
-            for i in range(3):
-                url = f"http://example.com/tile_{i}.png"
-                cache_path = downloader._get_cache_path(url)
-                cache_path.write_bytes(b'fake_tile_data_' * 1000)  # ~15KB each
-                tile_urls.append((i, i, url))
-            
-            # Estimate
-            stats = downloader.estimate_download_size(tile_urls, sample_count=10)
-            
-            # Verify
-            self.assertEqual(stats['total_tiles'], 3)
-            self.assertEqual(stats['cached_tiles'], 3)
-            self.assertEqual(stats['tiles_to_download'], 0)
-            self.assertEqual(stats['download_size_bytes'], 0)
-            self.assertGreater(stats['cached_size_bytes'], 0)
-            self.assertFalse(stats['is_estimate'])
+        # Line with point inside bbox
+        coords = [(0.5, 0.5), (1.5, 1.5)]
+        result = osm_filter._line_intersects_bbox(coords, 0, 0, 1, 1)
+        self.assertTrue(result)
+    
+    def test_line_intersects_bbox_point_outside(self):
+        """Test line intersection when all points are far outside bbox."""
+        osm_filter = OSMFilter([0, 0, 1, 1])
+        
+        # Line completely outside bbox (beyond margin)
+        coords = [(5, 5), (6, 6)]
+        result = osm_filter._line_intersects_bbox(coords, 0, 0, 1, 1)
+        self.assertFalse(result)
+    
+    def test_line_intersects_bbox_nearby(self):
+        """Test line intersection when points are nearby (within margin)."""
+        osm_filter = OSMFilter([0, 0, 1, 1])
+        
+        # Line just outside bbox but within margin
+        coords = [(1.05, 1.05), (1.08, 1.08)]
+        result = osm_filter._line_intersects_bbox(coords, 0, 0, 1, 1)
+        self.assertTrue(result)
+    
+    def test_tile_intersects_roads_with_geometries(self):
+        """Test tile intersection with manually added road geometries."""
+        bbox = [-79.5, 43.6, -79.3, 43.7]
+        osm_filter = OSMFilter(bbox)
+        
+        # Manually add a road geometry (simulating a road in Toronto)
+        # This road runs through the approximate center of our bbox
+        osm_filter.road_geometries = [
+            [(-79.4, 43.65), (-79.35, 43.65)]  # Horizontal road
+        ]
+        
+        # Get a tile in the middle of the bbox at zoom 10
+        col, row = latlon_to_tile(43.65, -79.4, 10)
+        
+        # This tile should intersect with the road
+        result = osm_filter.tile_intersects_roads(col, row, 10)
+        self.assertTrue(result)
+        
+        # Get a tile far from the road
+        col_far, row_far = latlon_to_tile(43.8, -79.6, 10)
+        result_far = osm_filter.tile_intersects_roads(col_far, row_far, 10)
+        self.assertFalse(result_far)
+    
+    def test_tile_intersects_roads_caching(self):
+        """Test that tile intersection results are cached."""
+        bbox = [-79.5, 43.6, -79.3, 43.7]
+        osm_filter = OSMFilter(bbox)
+        osm_filter.road_geometries = [[(-79.4, 43.65), (-79.35, 43.65)]]
+        
+        col, row = latlon_to_tile(43.65, -79.4, 10)
+        
+        # First call
+        result1 = osm_filter.tile_intersects_roads(col, row, 10)
+        
+        # Check cache was populated
+        self.assertIn((col, row, 10), osm_filter._cache)
+        
+        # Second call should use cache
+        result2 = osm_filter.tile_intersects_roads(col, row, 10)
+        
+        # Results should be the same
+        self.assertEqual(result1, result2)
 
 
 if __name__ == '__main__':

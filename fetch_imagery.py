@@ -14,7 +14,7 @@ import re
 import sys
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Set
 from xml.etree import ElementTree as ET
 
 import numpy as np
@@ -47,6 +47,151 @@ DEFAULT_WMTS_URL = "https://gis.toronto.ca/arcgis/rest/services/basemap/cot_orth
 
 # Default Toronto extent in EPSG:4326 (WGS84)
 DEFAULT_BBOX = [-79.639, 43.581, -79.116, 43.855]  # [west, south, east, north]
+
+# Overpass API endpoint
+OVERPASS_API_URL = "https://overpass-api.de/api/interpreter"
+
+
+class OSMFilter:
+    """Filters tiles based on OpenStreetMap road and sidewalk features."""
+    
+    def __init__(self, bbox: List[float]):
+        """Initialize OSM filter with bounding box.
+        
+        Args:
+            bbox: Bounding box [west, south, east, north] in EPSG:4326
+        """
+        self.bbox = bbox
+        self.road_geometries = []
+        self._cache = {}
+    
+    def fetch_osm_features(self) -> bool:
+        """Fetch road and sidewalk features from OSM via Overpass API.
+        
+        Returns:
+            True if features were fetched successfully, False otherwise
+        """
+        west, south, east, north = self.bbox
+        
+        # Overpass QL query for roads and sidewalks
+        # Query for highway features (roads, paths, footways) and sidewalk tags
+        overpass_query = f"""
+        [out:json][timeout:90];
+        (
+          way["highway"](if:t["highway"] !~ "^(proposed|construction|raceway)$")({south},{west},{north},{east});
+          way["footway"="sidewalk"]({south},{west},{north},{east});
+          way["sidewalk"~"yes|both|left|right"]({south},{west},{north},{east});
+        );
+        out geom;
+        """
+        
+        logger.info("Fetching OSM road and sidewalk features...")
+        
+        try:
+            response = requests.post(
+                OVERPASS_API_URL,
+                data={'data': overpass_query},
+                timeout=120
+            )
+            response.raise_for_status()
+            
+            data = response.json()
+            elements = data.get('elements', [])
+            
+            logger.info(f"Retrieved {len(elements)} OSM features")
+            
+            # Extract geometries (list of (lon, lat) coordinate lists)
+            for element in elements:
+                if 'geometry' in element:
+                    coords = [(node['lon'], node['lat']) for node in element['geometry']]
+                    if len(coords) >= 2:  # Valid line geometry
+                        self.road_geometries.append(coords)
+            
+            logger.info(f"Processed {len(self.road_geometries)} road/sidewalk geometries")
+            return len(self.road_geometries) > 0
+            
+        except requests.exceptions.Timeout:
+            logger.error("Timeout fetching OSM data. Try a smaller bounding box.")
+            return False
+        except Exception as e:
+            logger.error(f"Failed to fetch OSM features: {e}")
+            return False
+    
+    def tile_intersects_roads(self, col: int, row: int, zoom: int) -> bool:
+        """Check if a tile intersects with any road or sidewalk features.
+        
+        Args:
+            col: Tile column index
+            row: Tile row index
+            zoom: Zoom level
+            
+        Returns:
+            True if tile intersects with roads/sidewalks, False otherwise
+        """
+        # Check cache first
+        cache_key = (col, row, zoom)
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+        
+        # Get tile bounds in EPSG:3857
+        min_x_3857, min_y_3857, max_x_3857, max_y_3857 = get_tile_bounds(col, row, zoom)
+        
+        # Convert tile bounds from EPSG:3857 to EPSG:4326 (WGS84)
+        # Approximate conversion (good enough for filtering)
+        # Web Mercator to WGS84
+        min_lon = (min_x_3857 / 20037508.342789244) * 180.0
+        max_lon = (max_x_3857 / 20037508.342789244) * 180.0
+        
+        # Y conversion is more complex
+        min_lat = math.degrees(
+            2 * math.atan(math.exp(min_y_3857 / 20037508.342789244 * math.pi)) - math.pi / 2
+        )
+        max_lat = math.degrees(
+            2 * math.atan(math.exp(max_y_3857 / 20037508.342789244 * math.pi)) - math.pi / 2
+        )
+        
+        # Check if any road geometry intersects with tile bounds
+        result = False
+        for road_coords in self.road_geometries:
+            # Check if any segment of the road intersects the tile bounding box
+            if self._line_intersects_bbox(road_coords, min_lon, min_lat, max_lon, max_lat):
+                result = True
+                break
+        
+        # Cache result
+        self._cache[cache_key] = result
+        return result
+    
+    def _line_intersects_bbox(self, coords: List[Tuple[float, float]], 
+                             min_lon: float, min_lat: float, 
+                             max_lon: float, max_lat: float) -> bool:
+        """Check if a line (list of coordinates) intersects a bounding box.
+        
+        Uses simple point-in-box test for line vertices and edge intersection tests.
+        """
+        # Check if any point is inside the bbox
+        for lon, lat in coords:
+            if min_lon <= lon <= max_lon and min_lat <= lat <= max_lat:
+                return True
+        
+        # Check if any line segment intersects bbox edges
+        # This is a simplified check - a more robust implementation would check
+        # line-segment to bbox-edge intersections, but for our use case,
+        # checking if points are nearby is sufficient
+        
+        # Expand bbox slightly to catch nearby roads
+        margin = (max_lon - min_lon) * 0.1  # 10% margin
+        expanded_min_lon = min_lon - margin
+        expanded_max_lon = max_lon + margin
+        expanded_min_lat = min_lat - margin
+        expanded_max_lat = max_lat + margin
+        
+        for lon, lat in coords:
+            if (expanded_min_lon <= lon <= expanded_max_lon and 
+                expanded_min_lat <= lat <= expanded_max_lat):
+                return True
+        
+        return False
 
 
 class TileDownloader:
@@ -399,6 +544,47 @@ def compute_tile_indices(bbox: List[float], zoom: int) -> List[Tuple[int, int]]:
     return tiles
 
 
+def filter_tiles_by_osm(tiles: List[Tuple[int, int]], bbox: List[float], zoom: int) -> List[Tuple[int, int]]:
+    """Filter tiles to keep only those intersecting with OSM road/sidewalk features.
+    
+    Args:
+        tiles: List of (col, row) tile coordinates
+        bbox: Bounding box [west, south, east, north] in EPSG:4326
+        zoom: Zoom level
+        
+    Returns:
+        Filtered list of tiles that intersect with roads/sidewalks
+    """
+    osm_filter = OSMFilter(bbox)
+    
+    if not osm_filter.fetch_osm_features():
+        logger.warning("Failed to fetch OSM features, returning all tiles")
+        return tiles
+    
+    logger.info("Filtering tiles based on OSM road/sidewalk features...")
+    
+    filtered_tiles = []
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        TextColumn("({task.completed}/{task.total})"),
+        TimeElapsedColumn(),
+    ) as progress:
+        task = progress.add_task("Filtering tiles", total=len(tiles))
+        
+        for col, row in tiles:
+            if osm_filter.tile_intersects_roads(col, row, zoom):
+                filtered_tiles.append((col, row))
+            progress.update(task, advance=1)
+    
+    logger.info(f"Filtered {len(tiles)} tiles down to {len(filtered_tiles)} tiles with roads/sidewalks")
+    logger.info(f"Reduction: {len(tiles) - len(filtered_tiles)} tiles ({100 * (len(tiles) - len(filtered_tiles)) / len(tiles):.1f}%)")
+    
+    return filtered_tiles
+
+
 def create_geotiff_mosaic(tiles_data: Dict[Tuple[int, int], Image.Image], 
                           zoom: int, 
                           output_path: Path,
@@ -620,6 +806,12 @@ def main():
         help='Estimate download size without actually downloading tiles'
     )
     
+    parser.add_argument(
+        '--filter-osm',
+        action='store_true',
+        help='Filter tiles to keep only those with roads/sidewalks from OpenStreetMap'
+    )
+    
     args = parser.parse_args()
     
     # Set logging level
@@ -659,6 +851,14 @@ def main():
     if not tiles:
         logger.error("No tiles to download")
         return 1
+    
+    # Apply OSM filtering if requested
+    if args.filter_osm:
+        tiles = filter_tiles_by_osm(tiles, args.bbox, zoom)
+        
+        if not tiles:
+            logger.error("No tiles remaining after OSM filtering")
+            return 1
     
     # Build tile URL template
     url_template = wmts.build_tile_url_template(layer_id, args.tile_matrix_set)

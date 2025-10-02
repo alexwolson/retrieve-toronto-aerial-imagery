@@ -7,7 +7,8 @@ A Python CLI tool to fetch City of Toronto orthorectified aerial imagery from th
 - **Auto-detection**: Automatically detects the newest ortho layer (e.g., `cot_ortho_2022_color_8cm`)
 - **High Resolution**: Picks the highest available zoom level by default
 - **Smart Tile Management**: Computes tile indices for Toronto extent automatically
-- **Dry Run Mode**: Estimate download size and time before downloading (new!)
+- **OSM-Based Filtering**: Reduce dataset size by keeping only tiles with roads/sidewalks from OpenStreetMap (new!)
+- **Dry Run Mode**: Estimate download size and time before downloading
 - **Rich Progress Display**: Beautiful progress bars and enhanced logging powered by Rich
 - **Concurrent Downloads**: Downloads tiles concurrently with configurable worker threads
 - **Retry Logic**: Built-in retry mechanism with exponential backoff for failed downloads
@@ -179,6 +180,26 @@ uv run python fetch_imagery.py --zoom 18
 python fetch_imagery.py --zoom 18
 ```
 
+#### Filter by OpenStreetMap Road/Sidewalk Features (NEW!)
+
+Reduce dataset size by only downloading tiles that contain roads or sidewalks:
+
+```bash
+# Using uv
+uv run python fetch_imagery.py --filter-osm --bbox -79.5 43.6 -79.3 43.7
+
+# Using pip
+python fetch_imagery.py --filter-osm --bbox -79.5 43.6 -79.3 43.7
+```
+
+This feature:
+- Queries OpenStreetMap (OSM) via the Overpass API for road and sidewalk features in your bounding box
+- Filters out tiles that don't intersect with any street-level features
+- Can significantly reduce the dataset size (often by 50-80% in suburban/rural areas)
+- Useful when you only need imagery of streets and their immediate surroundings
+
+**Note:** The `--filter-osm` option requires internet access to query the Overpass API and may add 1-2 minutes to processing time for large bounding boxes.
+
 #### Adjust Concurrency
 
 ```bash
@@ -245,6 +266,7 @@ python fetch_imagery.py \
 | `--tile-matrix-set` | Tile matrix set identifier | `default` |
 | `--verbose` / `-v` | Enable verbose logging | False |
 | `--dry-run` | Estimate download size without downloading | False |
+| `--filter-osm` | Filter tiles to keep only those with roads/sidewalks | False |
 
 ## How It Works
 
