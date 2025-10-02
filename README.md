@@ -38,8 +38,15 @@ brew install gdal
 
 ### Install Python Dependencies
 
+**Option 1: Using pip with requirements.txt**
 ```bash
 pip install -r requirements.txt
+```
+
+**Option 2: Using setup.py (installs as a command)**
+```bash
+pip install -e .
+# Now you can use: fetch-toronto-imagery instead of: python fetch_imagery.py
 ```
 
 ## Usage
