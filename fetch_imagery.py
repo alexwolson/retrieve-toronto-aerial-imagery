@@ -197,11 +197,7 @@ class TileDownloader:
         
         return {
             'total_tiles': total_tiles,
-            'cached_tiles': 0,
-            'tiles_to_download': total_tiles,
             'total_size_bytes': estimated_download_size,
-            'download_size_bytes': estimated_download_size,
-            'cached_size_bytes': 0,
             'average_tile_size_bytes': avg_tile_size,
             'sample_count': len(sample_sizes),
             'is_estimate': True
@@ -699,44 +695,35 @@ def main():
         print(f"Bounding box:          [{args.bbox[0]}, {args.bbox[1]}, {args.bbox[2]}, {args.bbox[3]}]")
         print(f"Zoom level:            {zoom}")
         print(f"Total tiles:           {stats['total_tiles']:,}")
-        print(f"Already cached:        {stats['cached_tiles']:,} tiles ({format_bytes(stats['cached_size_bytes'])})")
-        print(f"Tiles to download:     {stats['tiles_to_download']:,}")
         print()
         
-        if stats['tiles_to_download'] > 0:
-            print(f"Average tile size:     {format_bytes(stats['average_tile_size_bytes'])}")
-            if stats['is_estimate'] and stats['sample_count'] > 0:
-                print(f"                       (based on {stats['sample_count']} sampled tiles)")
-            elif not stats['is_estimate']:
-                print(f"                       (based on cached tiles)")
-            print()
-            print(f"📥 Estimated download: {format_bytes(stats['download_size_bytes'])}")
+        print(f"Average tile size:     {format_bytes(stats['average_tile_size_bytes'])}")
+        if stats['sample_count'] > 0:
+            print(f"                       (based on {stats['sample_count']} sampled tiles)")
+        print()
         
-        print(f"💾 Total size:         {format_bytes(stats['total_size_bytes'])}")
+        print(f"📥 Estimated download: {format_bytes(stats['total_size_bytes'])}")
         print()
         
         # Time estimates
-        if stats['tiles_to_download'] > 0:
-            print("⏱️  Time Estimates (approximate):")
-            print()
-            
-            # Different connection speeds
-            speeds = {
-                'Fast (50 Mbps)': 50 * 1024 * 1024 / 8,     # bytes per second
-                'Medium (10 Mbps)': 10 * 1024 * 1024 / 8,
-                'Slow (2 Mbps)': 2 * 1024 * 1024 / 8
-            }
-            
-            for speed_name, bytes_per_sec in speeds.items():
-                seconds = stats['download_size_bytes'] / bytes_per_sec
-                time_str = format_time(seconds)
-                print(f"  {speed_name:20s}: ~{time_str}")
-            
-            print()
-            print("💡 Note: Actual download time depends on server response time,")
-            print("   network conditions, and concurrent workers (--max-workers).")
-        else:
-            print("✅ All tiles are already cached! No download needed.")
+        print("⏱️  Time Estimates (approximate):")
+        print()
+        
+        # Different connection speeds
+        speeds = {
+            'Fast (50 Mbps)': 50 * 1024 * 1024 / 8,     # bytes per second
+            'Medium (10 Mbps)': 10 * 1024 * 1024 / 8,
+            'Slow (2 Mbps)': 2 * 1024 * 1024 / 8
+        }
+        
+        for speed_name, bytes_per_sec in speeds.items():
+            seconds = stats['total_size_bytes'] / bytes_per_sec
+            time_str = format_time(seconds)
+            print(f"  {speed_name:20s}: ~{time_str}")
+        
+        print()
+        print("💡 Note: Actual download time depends on server response time,")
+        print("   network conditions, and concurrent workers (--max-workers).")
         
         print()
         print("To proceed with the download, run again without --dry-run")
