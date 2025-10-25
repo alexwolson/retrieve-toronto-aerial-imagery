@@ -7,8 +7,9 @@ A Python CLI tool to fetch City of Toronto orthorectified aerial imagery from th
 - **Auto-detection**: Automatically detects the newest ortho layer (e.g., `cot_ortho_2022_color_8cm`)
 - **High Resolution**: Picks the highest available zoom level by default
 - **Smart Tile Management**: Computes tile indices for Toronto extent automatically
-- **OSM-Based Filtering**: Reduce dataset size by keeping only tiles with roads/sidewalks from OpenStreetMap (new!)
-- **Dry Run Mode**: Estimate download size and time before downloading
+- **OSM-Based Filtering**: Reduce dataset size by keeping only tiles with roads/sidewalks from OpenStreetMap
+- **Efficient Storage**: Multiple cache format options (WebP, PNG, JPEG) with automatic migration (new!)
+- **Smart Dry Run**: Checks cached tiles and estimates download size/time before downloading (improved!)
 - **Rich Progress Display**: Beautiful progress bars and enhanced logging powered by Rich
 - **Concurrent Downloads**: Downloads tiles concurrently with configurable worker threads
 - **Retry Logic**: Built-in retry mechanism with exponential backoff for failed downloads
@@ -117,9 +118,10 @@ python fetch_imagery.py --bbox -79.4 43.64 -79.36 43.67 --zoom 19 --dry-run
 ```
 
 This will:
-- Sample a few tiles to estimate average size
 - Check which tiles are already cached
+- Sample uncached tiles to estimate average size
 - Show estimated download size and time for different connection speeds
+- Display total cache size with compression information
 - Exit without downloading anything
 
 **Example output:**
@@ -136,7 +138,9 @@ Average tile size:     87.34 KB
                        (based on 10 sampled tiles)
 
 📥 Estimated download: 21.84 MB
-💾 Total size:         21.84 MB
+💾 Total cache size:   14.20 MB
+   Cache format:       WEBP
+   Compression:        ~65% of PNG size
 
 ⏱️  Time Estimates (approximate):
 
@@ -200,6 +204,28 @@ This feature:
 
 **Note:** The `--filter-osm` option requires internet access to query the Overpass API and may add 1-2 minutes to processing time for large bounding boxes.
 
+#### Choose Cache Format for Efficient Storage (NEW!)
+
+Select the image format for cached tiles to optimize storage space:
+
+```bash
+# Using uv - WebP format (default, ~35% smaller than PNG)
+uv run python fetch_imagery.py --cache-format webp
+
+# Using pip - JPEG format (lossy, ~45% smaller than PNG)
+python fetch_imagery.py --cache-format jpeg
+
+# Using pip - PNG format (lossless, larger files)
+python fetch_imagery.py --cache-format png
+```
+
+**Cache Format Comparison:**
+- **WebP** (default): Best balance of quality and compression. ~35% smaller than PNG with lossless quality.
+- **JPEG**: Smallest file size (~45% smaller than PNG) but lossy compression. Good for visual use cases.
+- **PNG**: Largest file size but completely lossless. Use if you need pixel-perfect accuracy.
+
+The tool automatically migrates tiles from one format to another if you change the `--cache-format` option.
+
 #### Adjust Concurrency
 
 ```bash
@@ -262,6 +288,7 @@ python fetch_imagery.py \
 | `--zoom` | Zoom level | Auto-detected maximum zoom |
 | `--max-workers` | Concurrent download threads | 8 |
 | `--cache-dir` | Tile cache directory | `.tile_cache` |
+| `--cache-format` | Tile cache image format (png, webp, jpeg) | `webp` |
 | `--output` / `-o` | Output GeoTIFF path | `toronto_aerial.tif` |
 | `--tile-matrix-set` | Tile matrix set identifier | `default` |
 | `--verbose` / `-v` | Enable verbose logging | False |
@@ -285,7 +312,14 @@ The tool maintains a local cache of downloaded tiles in the cache directory (def
 - If the download is interrupted, you can re-run the same command and it will resume from where it left off
 - Already downloaded tiles are not re-downloaded
 - Cache files are named using MD5 hashes of tile URLs
+- Supports multiple image formats: WebP (default), PNG, and JPEG
+- Automatically migrates tiles when you change the `--cache-format` option
 - To force re-download, delete the cache directory or specific cached tiles
+
+**Cache Format Recommendations:**
+- Use **WebP** (default) for the best balance of quality and storage efficiency (~35% smaller than PNG)
+- Use **PNG** if you need lossless compression and have plenty of disk space
+- Use **JPEG** if disk space is critical and minor quality loss is acceptable (~45% smaller than PNG)
 
 ## Output Format
 
