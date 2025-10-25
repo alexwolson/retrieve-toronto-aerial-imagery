@@ -146,6 +146,64 @@ class TestTileDownloader(unittest.TestCase):
             # Paths should be in cache directory
             self.assertTrue(str(path1).startswith(tmpdir))
             self.assertTrue(str(path2).startswith(tmpdir))
+    
+    def test_cache_format_selection(self):
+        """Test that different cache formats are supported."""
+        from fetch_imagery import TileDownloader
+        import tempfile
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Test WebP format (default)
+            downloader_webp = TileDownloader(Path(tmpdir), cache_format='webp')
+            self.assertEqual(downloader_webp.cache_format, 'webp')
+            path_webp = downloader_webp._get_cache_path("https://example.com/tile.png")
+            self.assertTrue(str(path_webp).endswith('.webp'))
+            
+            # Test PNG format
+            downloader_png = TileDownloader(Path(tmpdir), cache_format='png')
+            self.assertEqual(downloader_png.cache_format, 'png')
+            path_png = downloader_png._get_cache_path("https://example.com/tile.png")
+            self.assertTrue(str(path_png).endswith('.png'))
+            
+            # Test JPEG format
+            downloader_jpg = TileDownloader(Path(tmpdir), cache_format='jpeg')
+            self.assertEqual(downloader_jpg.cache_format, 'jpg')  # Should normalize to 'jpg'
+            path_jpg = downloader_jpg._get_cache_path("https://example.com/tile.png")
+            self.assertTrue(str(path_jpg).endswith('.jpg'))
+    
+    def test_invalid_cache_format_defaults_to_webp(self):
+        """Test that invalid cache format defaults to webp."""
+        from fetch_imagery import TileDownloader
+        import tempfile
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            downloader = TileDownloader(Path(tmpdir), cache_format='invalid')
+            self.assertEqual(downloader.cache_format, 'webp')
+    
+    def test_find_existing_cache(self):
+        """Test finding cache files in different formats."""
+        from fetch_imagery import TileDownloader
+        import tempfile
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            downloader = TileDownloader(Path(tmpdir), cache_format='webp')
+            
+            url = "https://example.com/tile/1/2/3.png"
+            url_hash = __import__('hashlib').md5(url.encode()).hexdigest()
+            
+            # Create a PNG cache file
+            png_cache = Path(tmpdir) / f"{url_hash}.png"
+            png_cache.touch()
+            
+            # Should find the PNG file even though format is webp
+            found = downloader._find_existing_cache(url)
+            self.assertIsNotNone(found)
+            self.assertEqual(found, png_cache)
+            
+            # Test with no cache
+            url2 = "https://example.com/tile/4/5/6.png"
+            found2 = downloader._find_existing_cache(url2)
+            self.assertIsNone(found2)
 
 
 class TestDryRunFeature(unittest.TestCase):
