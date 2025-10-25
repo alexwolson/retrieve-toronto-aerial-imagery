@@ -8,8 +8,8 @@ A Python CLI tool to fetch City of Toronto orthorectified aerial imagery from th
 - **High Resolution**: Picks the highest available zoom level by default
 - **Smart Tile Management**: Computes tile indices for Toronto extent automatically
 - **OSM-Based Filtering**: Reduce dataset size by keeping only tiles with roads/sidewalks from OpenStreetMap
-- **Efficient Storage**: Multiple cache format options (WebP, PNG, JPEG) with automatic migration (new!)
-- **Smart Dry Run**: Checks cached tiles and estimates download size/time before downloading (improved!)
+- **Efficient Storage**: Multiple cache format options (WebP, PNG, JPEG) with 35-45% disk space savings using WebP/JPEG (new!)
+- **Smart Dry Run**: Checks cached tiles and estimates only uncached tiles for accurate download size/time (improved!)
 - **Rich Progress Display**: Beautiful progress bars and enhanced logging powered by Rich
 - **Concurrent Downloads**: Downloads tiles concurrently with configurable worker threads
 - **Retry Logic**: Built-in retry mechanism with exponential backoff for failed downloads
@@ -119,7 +119,7 @@ python fetch_imagery.py --bbox -79.4 43.64 -79.36 43.67 --zoom 19 --dry-run
 
 This will:
 - Check which tiles are already cached
-- Sample uncached tiles to estimate average size
+- Sample only uncached tiles to estimate average download size
 - Show estimated download size and time for different connection speeds
 - Display total cache size with compression information
 - Exit without downloading anything
@@ -288,7 +288,7 @@ python fetch_imagery.py \
 | `--zoom` | Zoom level | Auto-detected maximum zoom |
 | `--max-workers` | Concurrent download threads | 8 |
 | `--cache-dir` | Tile cache directory | `.tile_cache` |
-| `--cache-format` | Tile cache image format (png, webp, jpeg) | `webp` |
+| `--cache-format` | Tile cache image format (png, webp, jpeg, jpg) | `webp` |
 | `--output` / `-o` | Output GeoTIFF path | `toronto_aerial.tif` |
 | `--tile-matrix-set` | Tile matrix set identifier | `default` |
 | `--verbose` / `-v` | Enable verbose logging | False |
