@@ -8,7 +8,7 @@ A Python CLI tool to fetch City of Toronto orthorectified aerial imagery from th
 - **High Resolution**: Picks the highest available zoom level by default
 - **Smart Tile Management**: Computes tile indices for Toronto extent automatically
 - **OSM-Based Filtering**: Reduce dataset size by keeping only tiles with roads/sidewalks from OpenStreetMap
-- **Efficient Storage**: Multiple cache format options (WebP, PNG, JPEG) with 35-45% disk space savings using WebP/JPEG (new!)
+- **Efficient Storage**: Multiple cache format options (WebP, PNG, JPEG) with potential disk space savings (new!)
 - **Smart Dry Run**: Checks cached tiles and estimates only uncached tiles for accurate download size/time (improved!)
 - **Rich Progress Display**: Beautiful progress bars and enhanced logging powered by Rich
 - **Concurrent Downloads**: Downloads tiles concurrently with configurable worker threads
@@ -220,9 +220,11 @@ python fetch_imagery.py --cache-format png
 ```
 
 **Cache Format Comparison:**
-- **WebP** (default): Best balance of quality and compression. ~35% smaller than PNG with lossless quality.
-- **JPEG**: Smallest file size (~45% smaller than PNG) but lossy compression. Good for visual use cases.
+- **WebP** (default): Best balance of quality and compression. Typically achieves ~65% of PNG size with lossless quality.
+- **JPEG**: Smallest file size (typically ~55% of PNG size) but lossy compression. Good for visual use cases.
 - **PNG**: Largest file size but completely lossless. Use if you need pixel-perfect accuracy.
+
+**Note:** Compression ratios are empirical estimates. Actual cache sizes depend on source image characteristics and may vary.
 
 The tool automatically migrates tiles from one format to another if you change the `--cache-format` option.
 
@@ -317,9 +319,11 @@ The tool maintains a local cache of downloaded tiles in the cache directory (def
 - To force re-download, delete the cache directory or specific cached tiles
 
 **Cache Format Recommendations:**
-- Use **WebP** (default) for the best balance of quality and storage efficiency (~35% smaller than PNG)
+- Use **WebP** (default) for the best balance of quality and storage efficiency (typically ~65% of PNG size)
 - Use **PNG** if you need lossless compression and have plenty of disk space
-- Use **JPEG** if disk space is critical and minor quality loss is acceptable (~45% smaller than PNG)
+- Use **JPEG** if disk space is critical and minor quality loss is acceptable (typically ~55% of PNG size)
+
+**Note:** Actual cache sizes vary based on source imagery characteristics. These are empirical estimates.
 
 ## Output Format
 

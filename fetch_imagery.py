@@ -54,7 +54,11 @@ OVERPASS_API_URL = "https://overpass-api.de/api/interpreter"
 # Supported cache formats
 SUPPORTED_CACHE_FORMATS = ['png', 'webp', 'jpg']
 
+# Cache format aliases for normalization
+CACHE_FORMAT_ALIASES = {'jpeg': 'jpg'}
+
 # Compression ratios for cache formats (empirical estimates relative to PNG)
+# Note: These are rough estimates and actual sizes depend on source image characteristics
 WEBP_COMPRESSION_RATIO = 0.65  # WebP typically achieves ~65% of PNG size
 JPEG_COMPRESSION_RATIO = 0.55  # JPEG typically achieves ~55% of PNG size
 
@@ -216,14 +220,14 @@ class TileDownloader:
         })
         
         # Validate cache format
-        valid_formats = SUPPORTED_CACHE_FORMATS + ['jpeg']  # 'jpeg' will be normalized to 'jpg'
+        valid_formats = SUPPORTED_CACHE_FORMATS + list(CACHE_FORMAT_ALIASES.keys())
         if self.cache_format not in valid_formats:
             logger.warning(f"Invalid cache format '{cache_format}', defaulting to 'webp'")
             self.cache_format = 'webp'
         
-        # Normalize jpeg to jpg for consistency
-        if self.cache_format == 'jpeg':
-            self.cache_format = 'jpg'
+        # Normalize format aliases
+        if self.cache_format in CACHE_FORMAT_ALIASES:
+            self.cache_format = CACHE_FORMAT_ALIASES[self.cache_format]
     
     def _get_cache_path(self, url: str) -> Path:
         """Generate cache file path from URL."""
@@ -248,6 +252,7 @@ class TileDownloader:
         if existing_cache:
             try:
                 img = Image.open(existing_cache)
+                img.load()  # Ensure image is fully loaded into memory before migration
                 # If found in different format, re-save in current format
                 if existing_cache != cache_path:
                     logger.debug(f"Migrating cache from {existing_cache.suffix} to {cache_path.suffix}")
@@ -434,14 +439,23 @@ class TileDownloader:
         
         estimated_download_size = avg_tile_size * len(uncached_urls)
         
-        # Calculate estimated cache size (based on cache format compression)
-        compression_ratio = 1.0
-        if self.cache_format == 'webp':
-            compression_ratio = WEBP_COMPRESSION_RATIO
+        # Estimate cache size
+        # Note: Server tiles are typically already compressed (PNG). The actual cache size
+        # will depend on how well the source format re-compresses to the target format.
+        # These ratios are rough estimates and may not accurately reflect actual disk usage.
+        # For PNG cache format, size is approximately equal to download size.
+        # For WebP/JPEG, assume some additional compression benefit over source PNG.
+        if self.cache_format == 'png':
+            # PNG cache will be similar size to downloaded PNG tiles
+            estimated_cache_size = estimated_download_size
+        elif self.cache_format == 'webp':
+            # WebP may achieve some compression over source PNG (estimate ~65% of source)
+            estimated_cache_size = estimated_download_size * WEBP_COMPRESSION_RATIO
         elif self.cache_format == 'jpg':
-            compression_ratio = JPEG_COMPRESSION_RATIO
-        
-        estimated_cache_size = estimated_download_size * compression_ratio
+            # JPEG may achieve more compression over source PNG (estimate ~55% of source)
+            estimated_cache_size = estimated_download_size * JPEG_COMPRESSION_RATIO
+        else:
+            estimated_cache_size = estimated_download_size
         
         return {
             'total_tiles': total_tiles,
