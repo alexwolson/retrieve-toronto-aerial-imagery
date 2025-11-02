@@ -51,6 +51,13 @@ DEFAULT_BBOX = [-79.639, 43.581, -79.116, 43.855]  # [west, south, east, north]
 # Overpass API endpoint
 OVERPASS_API_URL = "https://overpass-api.de/api/interpreter"
 
+# Supported cache formats
+SUPPORTED_CACHE_FORMATS = ['png', 'webp', 'jpg']
+
+# Compression ratios for cache formats (empirical estimates relative to PNG)
+WEBP_COMPRESSION_RATIO = 0.65  # WebP typically achieves ~65% of PNG size
+JPEG_COMPRESSION_RATIO = 0.55  # JPEG typically achieves ~55% of PNG size
+
 
 class OSMFilter:
     """Filters tiles based on OpenStreetMap road and sidewalk features."""
@@ -209,7 +216,7 @@ class TileDownloader:
         })
         
         # Validate cache format
-        valid_formats = ['png', 'webp', 'jpeg', 'jpg']
+        valid_formats = SUPPORTED_CACHE_FORMATS + ['jpeg']  # 'jpeg' will be normalized to 'jpg'
         if self.cache_format not in valid_formats:
             logger.warning(f"Invalid cache format '{cache_format}', defaulting to 'webp'")
             self.cache_format = 'webp'
@@ -226,7 +233,7 @@ class TileDownloader:
     def _find_existing_cache(self, url: str) -> Optional[Path]:
         """Find cache file for URL in any supported format (for migration)."""
         url_hash = hashlib.md5(url.encode()).hexdigest()
-        for fmt in ['webp', 'png', 'jpg']:
+        for fmt in SUPPORTED_CACHE_FORMATS:
             cache_path = self.cache_dir / f"{url_hash}.{fmt}"
             if cache_path.exists():
                 return cache_path
@@ -244,8 +251,13 @@ class TileDownloader:
                 # If found in different format, re-save in current format
                 if existing_cache != cache_path:
                     logger.debug(f"Migrating cache from {existing_cache.suffix} to {cache_path.suffix}")
-                    self._save_image(img, cache_path)
-                    existing_cache.unlink()  # Remove old format
+                    try:
+                        self._save_image(img, cache_path)
+                        existing_cache.unlink()  # Remove old format only after successful save
+                    except Exception as e:
+                        logger.warning(f"Failed to migrate cache for {url}: {e}")
+                        # Keep the old cache file if migration failed
+                        raise
                 return img
             except Exception as e:
                 logger.warning(f"Cache corrupted for {url}: {e}")
@@ -276,10 +288,17 @@ class TileDownloader:
     def _save_image(self, img: Image.Image, path: Path):
         """Save image with appropriate settings for the cache format."""
         if self.cache_format == 'webp':
-            # WebP with good quality and lossless for aerial imagery
-            img.save(path, 'WEBP', quality=85, method=6)
+            # WebP with lossless compression for aerial imagery
+            img.save(path, 'WEBP', lossless=True, method=6)
         elif self.cache_format == 'jpg':
-            # JPEG with high quality
+            # JPEG with high quality (convert RGBA to RGB for compatibility)
+            if img.mode == 'RGBA':
+                # Convert RGBA to RGB by compositing on white background
+                rgb_img = Image.new('RGB', img.size, (255, 255, 255))
+                rgb_img.paste(img, mask=img.split()[3])  # Use alpha channel as mask
+                img = rgb_img
+            elif img.mode != 'RGB':
+                img = img.convert('RGB')
             img.save(path, 'JPEG', quality=90, optimize=True)
         else:
             # PNG with compression
@@ -361,8 +380,9 @@ class TileDownloader:
                     cached_tiles.append((col, row, url))
                     try:
                         cached_size += existing_cache.stat().st_size
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        # Failed to get file size, skip this tile's size contribution
+                        logger.debug(f"Failed to get size for cached tile {existing_cache}: {e}")
                 else:
                     uncached_urls.append((col, row, url))
                 
@@ -415,13 +435,11 @@ class TileDownloader:
         estimated_download_size = avg_tile_size * len(uncached_urls)
         
         # Calculate estimated cache size (based on cache format compression)
-        # WebP typically compresses to ~60-70% of PNG size
-        # JPEG typically compresses to ~50-60% of PNG size
         compression_ratio = 1.0
         if self.cache_format == 'webp':
-            compression_ratio = 0.65
+            compression_ratio = WEBP_COMPRESSION_RATIO
         elif self.cache_format == 'jpg':
-            compression_ratio = 0.55
+            compression_ratio = JPEG_COMPRESSION_RATIO
         
         estimated_cache_size = estimated_download_size * compression_ratio
         

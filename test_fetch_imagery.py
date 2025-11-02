@@ -3,6 +3,7 @@
 Unit tests for fetch_imagery.py
 """
 
+import hashlib
 import unittest
 from pathlib import Path
 import sys
@@ -189,7 +190,7 @@ class TestTileDownloader(unittest.TestCase):
             downloader = TileDownloader(Path(tmpdir), cache_format='webp')
             
             url = "https://example.com/tile/1/2/3.png"
-            url_hash = __import__('hashlib').md5(url.encode()).hexdigest()
+            url_hash = hashlib.md5(url.encode()).hexdigest()
             
             # Create a PNG cache file
             png_cache = Path(tmpdir) / f"{url_hash}.png"
