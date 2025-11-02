@@ -51,6 +51,17 @@ DEFAULT_BBOX = [-79.639, 43.581, -79.116, 43.855]  # [west, south, east, north]
 # Overpass API endpoint
 OVERPASS_API_URL = "https://overpass-api.de/api/interpreter"
 
+# Supported cache formats
+SUPPORTED_CACHE_FORMATS = ['png', 'webp', 'jpg']
+
+# Cache format aliases for normalization
+CACHE_FORMAT_ALIASES = {'jpeg': 'jpg'}
+
+# Compression ratios for cache formats (empirical estimates relative to PNG)
+# Note: These are rough estimates and actual sizes depend on source image characteristics
+WEBP_COMPRESSION_RATIO = 0.65  # WebP typically achieves ~65% of PNG size
+JPEG_COMPRESSION_RATIO = 0.55  # JPEG typically achieves ~55% of PNG size
+
 
 class OSMFilter:
     """Filters tiles based on OpenStreetMap road and sidewalk features."""
@@ -197,32 +208,65 @@ class OSMFilter:
 class TileDownloader:
     """Handles concurrent tile downloading with retries and caching."""
     
-    def __init__(self, cache_dir: Path, max_workers: int = 8, max_retries: int = 3):
+    def __init__(self, cache_dir: Path, max_workers: int = 8, max_retries: int = 3, cache_format: str = 'webp'):
         self.cache_dir = cache_dir
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.max_workers = max_workers
         self.max_retries = max_retries
+        self.cache_format = cache_format.lower()
         self.session = requests.Session()
         self.session.headers.update({
             'User-Agent': 'Toronto-Aerial-Imagery-Fetcher/1.0'
         })
+        
+        # Validate cache format
+        valid_formats = SUPPORTED_CACHE_FORMATS + list(CACHE_FORMAT_ALIASES.keys())
+        if self.cache_format not in valid_formats:
+            logger.warning(f"Invalid cache format '{cache_format}', defaulting to 'webp'")
+            self.cache_format = 'webp'
+        
+        # Normalize format aliases
+        if self.cache_format in CACHE_FORMAT_ALIASES:
+            self.cache_format = CACHE_FORMAT_ALIASES[self.cache_format]
     
     def _get_cache_path(self, url: str) -> Path:
         """Generate cache file path from URL."""
         url_hash = hashlib.md5(url.encode()).hexdigest()
-        return self.cache_dir / f"{url_hash}.png"
+        return self.cache_dir / f"{url_hash}.{self.cache_format}"
+    
+    def _find_existing_cache(self, url: str) -> Optional[Path]:
+        """Find cache file for URL in any supported format (for migration)."""
+        url_hash = hashlib.md5(url.encode()).hexdigest()
+        for fmt in SUPPORTED_CACHE_FORMATS:
+            cache_path = self.cache_dir / f"{url_hash}.{fmt}"
+            if cache_path.exists():
+                return cache_path
+        return None
     
     def download_tile(self, url: str) -> Optional[Image.Image]:
         """Download a single tile with caching and retries."""
         cache_path = self._get_cache_path(url)
         
-        # Check cache first
-        if cache_path.exists():
+        # Check cache first - try current format, then fallback to any existing format
+        existing_cache = self._find_existing_cache(url)
+        if existing_cache:
             try:
-                return Image.open(cache_path)
+                img = Image.open(existing_cache)
+                img.load()  # Ensure image is fully loaded into memory before migration
+                # If found in different format, re-save in current format
+                if existing_cache != cache_path:
+                    logger.debug(f"Migrating cache from {existing_cache.suffix} to {cache_path.suffix}")
+                    try:
+                        self._save_image(img, cache_path)
+                        existing_cache.unlink()  # Remove old format only after successful save
+                    except Exception as e:
+                        logger.warning(f"Failed to migrate cache for {url}: {e}")
+                        # Keep the old cache file if migration failed
+                        raise
+                return img
             except Exception as e:
                 logger.warning(f"Cache corrupted for {url}: {e}")
-                cache_path.unlink()
+                existing_cache.unlink()
         
         # Download with retries
         for attempt in range(self.max_retries):
@@ -233,7 +277,7 @@ class TileDownloader:
                 # Save to cache
                 img = Image.open(response.raw if hasattr(response, 'raw') else 
                                  __import__('io').BytesIO(response.content))
-                img.save(cache_path)
+                self._save_image(img, cache_path)
                 return img
             
             except Exception as e:
@@ -245,6 +289,25 @@ class TileDownloader:
                     time.sleep(2 ** attempt)  # Exponential backoff
         
         return None
+    
+    def _save_image(self, img: Image.Image, path: Path):
+        """Save image with appropriate settings for the cache format."""
+        if self.cache_format == 'webp':
+            # WebP with lossless compression for aerial imagery
+            img.save(path, 'WEBP', lossless=True, method=6)
+        elif self.cache_format == 'jpg':
+            # JPEG with high quality (convert RGBA to RGB for compatibility)
+            if img.mode == 'RGBA':
+                # Convert RGBA to RGB by compositing on white background
+                rgb_img = Image.new('RGB', img.size, (255, 255, 255))
+                rgb_img.paste(img, mask=img.split()[3])  # Use alpha channel as mask
+                img = rgb_img
+            elif img.mode != 'RGB':
+                img = img.convert('RGB')
+            img.save(path, 'JPEG', quality=90, optimize=True)
+        else:
+            # PNG with compression
+            img.save(path, 'PNG', optimize=True)
     
     def download_tiles_batch(self, tile_urls: List[Tuple[int, int, str]]) -> Dict[Tuple[int, int], Image.Image]:
         """Download multiple tiles concurrently."""
@@ -294,20 +357,19 @@ class TileDownloader:
     def estimate_download_size(self, tile_urls: List[Tuple[int, int, str]], 
                               sample_count: int = 10) -> Dict[str, any]:
         """
-        Estimate total download size by sampling tiles.
+        Estimate total download size by sampling tiles and checking cache.
         Returns statistics about the download.
         """
         import random
         
         total_tiles = len(tile_urls)
         
-        # Sample some tiles to estimate size (sample from all tiles without checking cache)
-        sample_size = min(sample_count, len(tile_urls))
-        sample_urls = random.sample(tile_urls, sample_size)
+        # First, check which tiles are already cached
+        logger.info("Checking cached tiles...")
+        cached_tiles = []
+        cached_size = 0
+        uncached_urls = []
         
-        logger.info(f"Sampling {sample_size} tiles to estimate download size...")
-        
-        sample_sizes = []
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -315,36 +377,97 @@ class TileDownloader:
             TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
             TimeElapsedColumn(),
         ) as progress:
-            task = progress.add_task("Sampling tiles", total=sample_size)
+            task = progress.add_task("Checking cache", total=len(tile_urls))
             
-            with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, sample_size)) as executor:
-                futures = [executor.submit(self._get_tile_size_head, url) 
-                          for _, _, url in sample_urls]
-                
-                for future in concurrent.futures.as_completed(futures):
+            for col, row, url in tile_urls:
+                existing_cache = self._find_existing_cache(url)
+                if existing_cache:
+                    cached_tiles.append((col, row, url))
                     try:
-                        size = future.result()
-                        if size:
-                            sample_sizes.append(size)
+                        cached_size += existing_cache.stat().st_size
                     except Exception as e:
-                        logger.debug(f"Error sampling tile: {e}")
+                        # Failed to get file size, skip this tile's size contribution
+                        logger.debug(f"Failed to get size for cached tile {existing_cache}: {e}")
+                else:
+                    uncached_urls.append((col, row, url))
+                
+                progress.update(task, advance=1)
+        
+        logger.info(f"Found {len(cached_tiles)} cached tiles ({format_bytes(cached_size)})")
+        
+        # Sample uncached tiles to estimate size if there are any
+        avg_tile_size = 0
+        sample_count_actual = 0
+        
+        if uncached_urls:
+            sample_size = min(sample_count, len(uncached_urls))
+            sample_urls = random.sample(uncached_urls, sample_size)
+            
+            logger.info(f"Sampling {sample_size} uncached tiles to estimate download size...")
+            
+            sample_sizes = []
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                TimeElapsedColumn(),
+            ) as progress:
+                task = progress.add_task("Sampling tiles", total=sample_size)
+                
+                with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, sample_size)) as executor:
+                    futures = [executor.submit(self._get_tile_size_head, url) 
+                              for _, _, url in sample_urls]
                     
-                    progress.update(task, advance=1)
+                    for future in concurrent.futures.as_completed(futures):
+                        try:
+                            size = future.result()
+                            if size:
+                                sample_sizes.append(size)
+                        except Exception as e:
+                            logger.debug(f"Error sampling tile: {e}")
+                        
+                        progress.update(task, advance=1)
+            
+            # Calculate average and estimate
+            if sample_sizes:
+                avg_tile_size = sum(sample_sizes) / len(sample_sizes)
+                sample_count_actual = len(sample_sizes)
+            else:
+                # Fallback estimate: aerial imagery tiles are typically 50-150KB
+                avg_tile_size = 100_000  # 100KB
         
-        # Calculate average and estimate
-        if sample_sizes:
-            avg_tile_size = sum(sample_sizes) / len(sample_sizes)
+        estimated_download_size = avg_tile_size * len(uncached_urls)
+        
+        # Estimate cache size
+        # Note: Server tiles are typically already compressed (PNG). The actual cache size
+        # will depend on how well the source format re-compresses to the target format.
+        # These ratios are rough estimates and may not accurately reflect actual disk usage.
+        # For PNG cache format, size is approximately equal to download size.
+        # For WebP/JPEG, assume some additional compression benefit over source PNG.
+        if self.cache_format == 'png':
+            # PNG cache will be similar size to downloaded PNG tiles
+            estimated_cache_size = estimated_download_size
+        elif self.cache_format == 'webp':
+            # WebP may achieve some compression over source PNG (estimate ~65% of source)
+            estimated_cache_size = estimated_download_size * WEBP_COMPRESSION_RATIO
+        elif self.cache_format == 'jpg':
+            # JPEG may achieve more compression over source PNG (estimate ~55% of source)
+            estimated_cache_size = estimated_download_size * JPEG_COMPRESSION_RATIO
         else:
-            # Fallback estimate: aerial imagery tiles are typically 50-150KB
-            avg_tile_size = 100_000  # 100KB
-        
-        estimated_download_size = avg_tile_size * total_tiles
+            estimated_cache_size = estimated_download_size
         
         return {
             'total_tiles': total_tiles,
-            'total_size_bytes': estimated_download_size,
+            'cached_tiles': len(cached_tiles),
+            'cached_size_bytes': cached_size,
+            'uncached_tiles': len(uncached_urls),
+            'download_size_bytes': estimated_download_size,
+            'total_size_bytes': cached_size + estimated_cache_size,
             'average_tile_size_bytes': avg_tile_size,
-            'sample_count': len(sample_sizes),
+            'sample_count': sample_count_actual,
+            'cache_format': self.cache_format,
+            'compression_ratio': compression_ratio,
             'is_estimate': True
         }
 
@@ -812,6 +935,13 @@ def main():
         help='Filter tiles to keep only those with roads/sidewalks from OpenStreetMap'
     )
     
+    parser.add_argument(
+        '--cache-format',
+        choices=['png', 'webp', 'jpeg', 'jpg'],
+        default='webp',
+        help='Image format for tile cache (webp recommended for best compression)'
+    )
+    
     args = parser.parse_args()
     
     # Set logging level
@@ -885,7 +1015,7 @@ def main():
         logger.info("DRY RUN MODE - Estimating download requirements")
         logger.info("=" * 80)
         
-        downloader = TileDownloader(args.cache_dir, args.max_workers)
+        downloader = TileDownloader(args.cache_dir, args.max_workers, cache_format=args.cache_format)
         stats = downloader.estimate_download_size(tile_urls, sample_count=10)
         
         # Format output
@@ -895,35 +1025,47 @@ def main():
         print(f"Bounding box:          [{args.bbox[0]}, {args.bbox[1]}, {args.bbox[2]}, {args.bbox[3]}]")
         print(f"Zoom level:            {zoom}")
         print(f"Total tiles:           {stats['total_tiles']:,}")
+        print(f"Already cached:        {stats['cached_tiles']:,} tiles ({format_bytes(stats['cached_size_bytes'])})")
+        print(f"Tiles to download:     {stats['uncached_tiles']:,}")
         print()
         
-        print(f"Average tile size:     {format_bytes(stats['average_tile_size_bytes'])}")
-        if stats['sample_count'] > 0:
-            print(f"                       (based on {stats['sample_count']} sampled tiles)")
+        if stats['uncached_tiles'] > 0:
+            print(f"Average tile size:     {format_bytes(stats['average_tile_size_bytes'])}")
+            if stats['sample_count'] > 0:
+                print(f"                       (based on {stats['sample_count']} sampled tiles)")
+            print()
+            
+            print(f"📥 Estimated download: {format_bytes(stats['download_size_bytes'])}")
+        else:
+            print("✅ All tiles are already cached!")
+            print()
+        
+        print(f"💾 Total cache size:   {format_bytes(stats['total_size_bytes'])}")
+        print(f"   Cache format:       {stats['cache_format'].upper()}")
+        if stats['cache_format'] != 'png':
+            print(f"   Compression:        ~{int(stats['compression_ratio'] * 100)}% of PNG size")
         print()
         
-        print(f"📥 Estimated download: {format_bytes(stats['total_size_bytes'])}")
-        print()
-        
-        # Time estimates
-        print("⏱️  Time Estimates (approximate):")
-        print()
-        
-        # Different connection speeds
-        speeds = {
-            'Fast (50 Mbps)': 50 * 1024 * 1024 / 8,     # bytes per second
-            'Medium (10 Mbps)': 10 * 1024 * 1024 / 8,
-            'Slow (2 Mbps)': 2 * 1024 * 1024 / 8
-        }
-        
-        for speed_name, bytes_per_sec in speeds.items():
-            seconds = stats['total_size_bytes'] / bytes_per_sec
-            time_str = format_time(seconds)
-            print(f"  {speed_name:20s}: ~{time_str}")
-        
-        print()
-        print("💡 Note: Actual download time depends on server response time,")
-        print("   network conditions, and concurrent workers (--max-workers).")
+        # Time estimates (only if there are tiles to download)
+        if stats['uncached_tiles'] > 0:
+            print("⏱️  Time Estimates (approximate):")
+            print()
+            
+            # Different connection speeds
+            speeds = {
+                'Fast (50 Mbps)': 50 * 1024 * 1024 / 8,     # bytes per second
+                'Medium (10 Mbps)': 10 * 1024 * 1024 / 8,
+                'Slow (2 Mbps)': 2 * 1024 * 1024 / 8
+            }
+            
+            for speed_name, bytes_per_sec in speeds.items():
+                seconds = stats['download_size_bytes'] / bytes_per_sec
+                time_str = format_time(seconds)
+                print(f"  {speed_name:20s}: ~{time_str}")
+            
+            print()
+            print("💡 Note: Actual download time depends on server response time,")
+            print("   network conditions, and concurrent workers (--max-workers).")
         
         print()
         print("To proceed with the download, run again without --dry-run")
@@ -932,7 +1074,7 @@ def main():
         return 0
     
     # Download tiles
-    downloader = TileDownloader(args.cache_dir, args.max_workers)
+    downloader = TileDownloader(args.cache_dir, args.max_workers, cache_format=args.cache_format)
     
     logger.info(f"Downloading {len(tile_urls)} tiles...")
     tiles_data = downloader.download_tiles_batch(tile_urls)
